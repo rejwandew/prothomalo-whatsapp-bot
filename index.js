@@ -71,43 +71,88 @@ function buildFallbackSummary(fullText) {
     return result || fullText.slice(0, 750);
 }
 
-// Helper 3: Summarize full news in Bangla using Gemini 2.5 Flash
+// Helper 3: Summarize full news in Bangla using any available Gemini Flash model
 async function summarizeWithGemini(headline, fullText) {
-    const prompt = `তুমি একজন পেশাদার সংবাদ সম্পাদক। নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
-এই প্রতিবেদনটি পড়ে এর সবগুলো গুরুত্বপূর্ণ তথ্য, প্রেক্ষাপট ও মূল বক্তব্য বজায় রেখে একটি সুন্দর, প্রাঞ্জল ও মাঝারি আকারের সারাংশ (প্রায় ১২০ থেকে ১৬০ শব্দের মধ্যে, ২টি অনুচ্ছেদে) বাংলায় লিখে দাও। 
+    const prompt = `তুমি একজন পেশাদার সংবাদ সম্পাদক। নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
+এই প্রতিবেদনটি পড়ে এর সবগুলো গুরুত্বপূর্ণ তথ্য, প্রেক্ষাপট ও মূল বক্তব্য বজায় রেখে একটি সুন্দর, প্রাঞ্জল ও মাঝারি আকারের সারাংশ (প্রায় ১২০ থেকে ১৬০ শব্দের মধ্যে, ২টি অনুচ্ছেদে) বাংলায় লিখে দাও। 
 সারাংশের ভেতর নতুন করে শিরোনাম, কোনো লিংক বা অতিরিক্ত ভূমিকা লিখবে না—শুধুমাত্র মূল সারাংশটুকু লিখবে।
 
 শিরোনাম: ${headline}
 বিস্তারিত সংবাদ:
 ${fullText}`;
 
+    // Default fallback list of Flash model names across v1beta
+    let candidateModels = [
+        'gemini-flash-latest',
+        'gemini-3-flash-preview',
+        'gemini-3.0-flash-preview',
+        'gemini-3-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash'
+    ];
+
+    // Query Google's ListModels endpoint to automatically discover exact active Flash models for this key
     try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { temperature: 0.3 }
-            })
-        });
+        const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`;
+        const listRes = await fetch(listUrl);
+        const listData = await listRes.json();
 
-        const data = await response.json();
+        if (listData && Array.isArray(listData.models)) {
+            const discoveredFlashModels = listData.models
+                .filter(m => 
+                    m.name && 
+                    m.name.toLowerCase().includes('flash') && 
+                    !m.name.toLowerCase().includes('image') &&
+                    !m.name.toLowerCase().includes('audio') &&
+                    !m.name.toLowerCase().includes('tts') &&
+                    Array.isArray(m.supportedGenerationMethods) &&
+                    m.supportedGenerationMethods.includes('generateContent')
+                )
+                .map(m => m.name.replace('models/', ''))
+                .reverse(); // Put newest models at the front
 
-        if (data.error) {
-            console.warn('⚠️ Gemini API Warning:', data.error.message);
-            return buildFallbackSummary(fullText);
+            if (discoveredFlashModels.length > 0) {
+                candidateModels = [...new Set([...discoveredFlashModels, ...candidateModels])];
+                console.log('🔍 Auto-detected Flash models:', discoveredFlashModels.join(', '));
+            }
+        } else if (listData?.error) {
+            console.warn('⚠️ ListModels Warning:', listData.error.message);
         }
-
-        const aiSummary = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        if (aiSummary) {
-            console.log('✨ Gemini 2.5 Flash summary generated!');
-            return aiSummary;
-        }
-    } catch (err) {
-        console.error('Gemini API Error:', err);
+    } catch (listErr) {
+        console.warn('⚠️ Could not fetch model list, trying default Flash models...');
     }
 
+    // Try each Flash model one by one until a summary is generated
+    for (const modelName of candidateModels) {
+        try {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { temperature: 0.3 }
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                console.warn(`⚠️ Model ${modelName} skipped:`, data.error.message);
+                continue;
+            }
+
+            const aiSummary = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+            if (aiSummary) {
+                console.log(`✨ Gemini summary generated successfully using [${modelName}]!`);
+                return aiSummary;
+            }
+        } catch (err) {
+            console.error(`Error trying model ${modelName}:`, err.message);
+        }
+    }
+
+    console.warn('⚠️ All Gemini Flash models failed; using paragraph combiner fallback.');
     return buildFallbackSummary(fullText);
 }
 
