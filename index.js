@@ -7,7 +7,7 @@ import pino from 'pino';
 const MY_PHONE_NUMBER = '8801839823498'; 
 
 // 👇 YOUR BROTHER'S WHATSAPP NUMBER (Keep '88' at the start, no '+' sign)
-const RECEIVER_NUMBER = '8801XXXXXXXXX'; 
+const RECEIVER_NUMBER = '8801907323903'; 
 
 const parser = new Parser();
 const CACHE_FILE = 'sent_cache.json';
