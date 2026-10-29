@@ -3,8 +3,11 @@ import Parser from 'rss-parser';
 import fs from 'fs';
 import pino from 'pino';
 
-// 👇 CHANGE THIS TO YOUR WHATSAPP NUMBER (Keep '88' at the start, no '+' sign)
+// 👇 YOUR NUMBER (Already linked - do not change)
 const MY_PHONE_NUMBER = '8801839823498'; 
+
+// 👇 PUT YOUR BROTHER'S WHATSAPP NUMBER HERE (Keep '88' at the start, no '+' sign)
+const RECEIVER_NUMBER = '8801XXXXXXXXX'; 
 
 const parser = new Parser();
 const CACHE_FILE = 'sent_cache.json';
@@ -55,7 +58,7 @@ async function startBot() {
             }
         }
 
-        // 3. ONCE CONNECTED: Check Prothom Alo & Send New Articles
+        // 3. ONCE CONNECTED: Check Prothom Alo & Send New Articles to Brother
         if (connection === 'open') {
             console.log('✅ Connected to WhatsApp!');
 
@@ -78,19 +81,19 @@ async function startBot() {
                     }
                 }
 
-                if (isFirstRun) {
-                    // On First Run, save current articles and send 1 welcome news item so you aren't spammed
+                if (isFirstRun && newItems.length > 0) {
+                    // On First Run, save current articles and send 1 welcome news item so he isn't spammed
                     const latest = newItems[newItems.length - 1];
-                    await sock.sendMessage(`${MY_PHONE_NUMBER}@s.whatsapp.net`, {
+                    await sock.sendMessage(`${RECEIVER_NUMBER}@s.whatsapp.net`, {
                         text: `✅ *Prothom Alo Bot Activated!*\n\n📰 *${latest.title}*\n🔗 ${latest.link}`
                     });
-                    console.log('Sent initial activation news!');
+                    console.log('Sent initial activation news to brother!');
                 } else if (newItems.length > 0) {
                     for (const article of newItems) {
-                        await sock.sendMessage(`${MY_PHONE_NUMBER}@s.whatsapp.net`, {
+                        await sock.sendMessage(`${RECEIVER_NUMBER}@s.whatsapp.net`, {
                             text: `📰 *${article.title}*\n\n🔗 ${article.link}`
                         });
-                        console.log('Sent:', article.title);
+                        console.log('Sent to brother:', article.title);
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 } else {
