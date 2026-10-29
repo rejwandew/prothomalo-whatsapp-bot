@@ -12,8 +12,8 @@ const RECEIVER_NUMBER = '8801907323903';
 // 👇 YOUR GEMINI API KEY (Hardcoded directly)
 const GEMINI_API_KEY = 'AQ.Ab8RN6JRjd1VI0vZfOsZtZZQWfY73yI8iO9fqJKoVCRKXg5ZYw';
 
-// 👇 SET TO true TO FORCE SENDING 1 NEWS RIGHT NOW EVEN IF ALREADY IN CACHE (Change to false after testing!)
-const FORCE_SEND_ONE_IF_NO_NEW = true;
+// 👇 SET TO false SO IT ONLY SENDS BRAND NEW ARTICLES
+const FORCE_SEND_ONE_IF_NO_NEW = false;
 
 const parser = new Parser({
     customFields: {
@@ -21,6 +21,9 @@ const parser = new Parser({
     }
 });
 const CACHE_FILE = 'sent_cache.json';
+
+// Lock to prevent the bot from running twice or reconnecting during shutdown
+let isJobDone = false;
 
 // Helper 1: Extract full article text from the RSS item or fetch article page
 async function getFullArticleText(item) {
@@ -81,17 +84,13 @@ async function summarizeWithGemini(headline, fullText) {
 বিস্তারিত সংবাদ:
 ${fullText}`;
 
-    // Default fallback list of Flash model names across v1beta
     let candidateModels = [
+        'gemini-3.8-flash',
         'gemini-flash-latest',
         'gemini-3-flash-preview',
-        'gemini-3.0-flash-preview',
-        'gemini-3-flash',
-        'gemini-2.5-flash-lite',
-        'gemini-2.0-flash'
+        'gemini-2.5-flash'
     ];
 
-    // Query Google's ListModels endpoint to automatically discover exact active Flash models for this key
     try {
         const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`;
         const listRes = await fetch(listUrl);
@@ -109,20 +108,16 @@ ${fullText}`;
                     m.supportedGenerationMethods.includes('generateContent')
                 )
                 .map(m => m.name.replace('models/', ''))
-                .reverse(); // Put newest models at the front
+                .reverse();
 
             if (discoveredFlashModels.length > 0) {
                 candidateModels = [...new Set([...discoveredFlashModels, ...candidateModels])];
-                console.log('🔍 Auto-detected Flash models:', discoveredFlashModels.join(', '));
             }
-        } else if (listData?.error) {
-            console.warn('⚠️ ListModels Warning:', listData.error.message);
         }
     } catch (listErr) {
-        console.warn('⚠️ Could not fetch model list, trying default Flash models...');
+        // Fallback to default candidate list
     }
 
-    // Try each Flash model one by one until a summary is generated
     for (const modelName of candidateModels) {
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
@@ -138,7 +133,6 @@ ${fullText}`;
             const data = await response.json();
 
             if (data.error) {
-                console.warn(`⚠️ Model ${modelName} skipped:`, data.error.message);
                 continue;
             }
 
@@ -148,11 +142,10 @@ ${fullText}`;
                 return aiSummary;
             }
         } catch (err) {
-            console.error(`Error trying model ${modelName}:`, err.message);
+            // Try next model
         }
     }
 
-    console.warn('⚠️ All Gemini Flash models failed; using paragraph combiner fallback.');
     return buildFallbackSummary(fullText);
 }
 
@@ -189,8 +182,10 @@ async function startBot() {
             }, 3000);
         }
 
-        // 2. RECONNECT AUTOMATICALLY RIGHT AFTER PAIRING
+        // 2. RECONNECT AUTOMATICALLY ONLY IF JOB IS NOT DONE YET
         if (connection === 'close') {
+            if (isJobDone) return;
+
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             if (statusCode !== DisconnectReason.loggedOut) {
                 console.log('Reconnecting socket...');
@@ -201,8 +196,11 @@ async function startBot() {
             }
         }
 
-        // 3. ONCE CONNECTED: Check Prothom Alo RSS & Send New Articles
+        // 3. ONCE CONNECTED: Check Prothom Alo RSS & Send All Newer Articles Separately
         if (connection === 'open') {
+            if (isJobDone) return;
+            isJobDone = true;
+
             console.log('✅ Connected to WhatsApp!');
 
             try {
@@ -223,10 +221,22 @@ async function startBot() {
                 const feed = await parser.parseURL('https://www.prothomalo.com/stories.rss');
                 console.log(`📥 Fetched ${feed.items.length} stories from Prothom Alo RSS.`);
 
+                // If cache only had <= 5 items from the old code, quietly record older items (index 5 to 35)
+                // so expanding the check window to 15 doesn't dump yesterday's old news on the first run
+                if (sentCache.length <= 5 && feed.items.length > 5) {
+                    for (const oldItem of feed.items.slice(5)) {
+                        const oldId = oldItem.link.replace(/\/$/, '').split('/').pop();
+                        if (!sentCache.includes(oldId)) {
+                            sentCache.push(oldId);
+                        }
+                    }
+                }
+
                 const isFirstRun = sentCache.length === 0;
                 const newItems = [];
 
-                for (const item of feed.items.slice(0, 5).reverse()) {
+                // Check the latest 15 articles from oldest-to-newest
+                for (const item of feed.items.slice(0, 15).reverse()) {
                     const articleId = item.link.replace(/\/$/, '').split('/').pop();
                     if (!sentCache.includes(articleId)) {
                         const fullText = await getFullArticleText(item);
@@ -234,6 +244,10 @@ async function startBot() {
                         sentCache.push(articleId);
                     }
                 }
+
+                // Save updated cache immediately
+                if (sentCache.length > 200) sentCache = sentCache.slice(-200);
+                fs.writeFileSync(CACHE_FILE, JSON.stringify(sentCache, null, 2));
 
                 if (isFirstRun && newItems.length > 0) {
                     const latest = newItems[newItems.length - 1];
@@ -243,16 +257,16 @@ async function startBot() {
                     });
                     console.log('🚀 Sent initial detailed news:', latest.title);
                 } else if (newItems.length > 0) {
+                    console.log(`🆕 Found ${newItems.length} new article(s)! Sending each as a separate message...`);
                     for (const article of newItems) {
                         const summary = await summarizeWithGemini(article.title, article.fullText);
                         await sock.sendMessage(targetJid, {
                             text: `*${article.title}*\n\n${summary}`
                         });
-                        console.log('🚀 Sent:', article.title);
+                        console.log('🚀 Sent separate message:', article.title);
                         await new Promise(r => setTimeout(r, 3000));
                     }
                 } else if (FORCE_SEND_ONE_IF_NO_NEW && feed.items.length > 0) {
-                    // Force send the #1 latest story even if it was already in sent_cache.json
                     const topItem = feed.items[0];
                     const fullText = await getFullArticleText(topItem);
                     const summary = await summarizeWithGemini(topItem.title.trim(), fullText);
@@ -263,9 +277,6 @@ async function startBot() {
                 } else {
                     console.log('📭 No new news since last check.');
                 }
-
-                if (sentCache.length > 100) sentCache = sentCache.slice(-100);
-                fs.writeFileSync(CACHE_FILE, JSON.stringify(sentCache, null, 2));
 
             } catch (err) {
                 console.error('Error fetching/sending news:', err);
