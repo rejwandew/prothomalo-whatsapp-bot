@@ -1,37 +1,59 @@
 name: Prothom Alo WhatsApp Bot
 
 on:
-  schedule:
-    # Runs every 30 minutes, ONLY between 5:00 AM and 11:59 PM (Stops from 12:00 AM to 4:59 AM)
-    - cron: '*/30 5-23 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  send-news:
+  run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
-      - name: Checkout Repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Install Packages
-        run: npm install rss-parser pino
+      - name: Install dependencies
+        run: npm install
+
+      - name: Decrypt WhatsApp Session
+        env:
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+        run: |
+          if [ -f "session.tar.gz.enc" ]; then
+            openssl enc -d -aes-256-cbc -salt -pbkdf2 -in session.tar.gz.enc -out session.tar.gz -k "$SESSION_SECRET"
+            tar -xzf session.tar.gz
+            rm -f session.tar.gz
+            echo "✅ Session decrypted successfully."
+          else
+            echo "ℹ️ No encrypted session found. Ready for fresh pairing."
+          fi
 
       - name: Run Bot
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PHONE_NUMBER: ${{ secrets.PHONE_NUMBER }}
+          RECIPIENT_NUMBER: ${{ secrets.RECIPIENT_NUMBER }}
         run: node index.js
 
-      - name: Save Session & Sent News Cache
+      - name: Encrypt and Save Session & Cache
+        if: always()
+        env:
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add auth_info_baileys/ sent_cache.json SENT_LOG.md || true
-          git diff --staged --quiet || git commit -m "Update session and news cache"
+          if [ -d "auth_info_baileys" ]; then
+            tar -czf session.tar.gz auth_info_baileys
+            openssl enc -e -aes-256-cbc -salt -pbkdf2 -in session.tar.gz -out session.tar.gz.enc -k "$SESSION_SECRET"
+            rm -f session.tar.gz
+          fi
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Action"
+          git add session.tar.gz.enc sent_cache.json SENT_LOG.md || true
+          git diff --staged --quiet || git commit -m "chore: update encrypted session and cache [skip ci]"
           git push
