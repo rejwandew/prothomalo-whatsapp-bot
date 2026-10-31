@@ -1,25 +1,26 @@
 name: Prothom Alo WhatsApp Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:       # Triggered by cron-job.org or manually
 
 permissions:
-  contents: write
+  contents: write          # Allows GitHub to save your encrypted session & news cache
 
 jobs:
-  run-bot:
+  send-news:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Install Packages
         run: npm install
 
       - name: Decrypt WhatsApp Session
@@ -30,19 +31,17 @@ jobs:
             openssl enc -d -aes-256-cbc -salt -pbkdf2 -in session.tar.gz.enc -out session.tar.gz -k "$SESSION_SECRET"
             tar -xzf session.tar.gz
             rm -f session.tar.gz
-            echo "✅ Session decrypted successfully."
+            echo "✅ Session decrypted!"
           else
-            echo "ℹ️ No encrypted session found. Ready for fresh pairing."
+            echo "ℹ️ No encrypted session found yet."
           fi
 
       - name: Run Bot
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PHONE_NUMBER: ${{ secrets.PHONE_NUMBER }}
-          RECIPIENT_NUMBER: ${{ secrets.RECIPIENT_NUMBER }}
         run: node index.js
 
-      - name: Encrypt and Save Session & Cache
+      - name: Encrypt Session & Save News Cache
         if: always()
         env:
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
@@ -52,8 +51,8 @@ jobs:
             openssl enc -e -aes-256-cbc -salt -pbkdf2 -in session.tar.gz -out session.tar.gz.enc -k "$SESSION_SECRET"
             rm -f session.tar.gz
           fi
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Action"
-          git add session.tar.gz.enc sent_cache.json SENT_LOG.md || true
-          git diff --staged --quiet || git commit -m "chore: update encrypted session and cache [skip ci]"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add session.tar.gz.enc sent_cache.json || true
+          git diff --staged --quiet || git commit -m "Update encrypted session and news cache [skip ci]"
           git push
