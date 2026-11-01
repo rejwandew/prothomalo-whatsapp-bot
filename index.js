@@ -44,56 +44,121 @@ async function summarizeWithGemini(headline, fullText) {
 বিস্তারিত সংবাদ:
 ${fullText}`;
 
-    // Uses automatic GITHUB_TOKEN (or a personal ghp_ token if placed in GEMINI_API_KEY)
-    const token = (process.env.GITHUB_TOKEN || process.env.GEMINI_API_KEY || '').trim();
+    // Universal Summarizer: Tries New GitHub AI Endpoint + Gemini (if AIzaSy key exists)
+async function summarizeWithGemini(headline, fullText) {
+    const prompt = `তুমি একজন পেশাদার সংবাদ সম্পাদক। নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
+এই প্রতিবেদনটি পড়ে এর সবগুলো গুরুত্বপূর্ণ তথ্য, প্রেক্ষাপট ও মূল বক্তব্য বজায় রেখে একটি সুন্দর, প্রাঞ্জল ও মাঝারি আকারের সারাংশ (প্রায় ১২০ থেকে ১৬০ শব্দের মধ্যে, ২টি অনুচ্ছেদে) বাংলায় লিখে দাও। 
+সারাংশের ভেতর নতুন করে শিরোনাম, কোনো লিংক বা অতিরিক্ত ভূমিকা লিখবে না—শুধুমাত্র মূল সারাংশটুকু লিখবে।
 
-    const githubModels = [
-        'gpt-4o-mini',
-        'DeepSeek-V3',
-        'Meta-Llama-3.3-70B-Instruct',
-        'gpt-4o'
-    ];
+শিরোনাম: ${headline}
+বিস্তারিত সংবাদ:
+${fullText}`;
 
-    for (const modelName of githubModels) {
-        try {
-            const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    model: modelName,
-                    messages: [
-                        { role: 'system', content: 'তুমি একজন দক্ষ বাংলা সংবাদ সম্পাদক।' },
-                        { role: 'user', content: prompt }
-                    ],
-                    temperature: 0.3,
-                    max_tokens: 600
-                }),
-                signal: AbortSignal.timeout(25000)
-            });
+    const githubToken = (process.env.GITHUB_TOKEN || '').trim();
+    const geminiKey = (process.env.GEMINI_API_KEY || '').trim();
 
-            const data = await response.json();
-            if (!response.ok || data.error) {
-                const errMsg = data?.error?.message || JSON.stringify(data);
-                console.warn(`⚠️ [GitHub AI: ${modelName}] Error (${response.status}):`, errMsg);
-                continue;
+    // ---------------------------------------------------------
+    // 1. Try New GitHub Models Endpoint (models.github.ai)
+    // ---------------------------------------------------------
+    if (githubToken) {
+        const githubModels = [
+            'openai/gpt-4o-mini',
+            'deepseek/DeepSeek-V3-0324',
+            'meta/Llama-3.3-70B-Instruct',
+            'openai/gpt-4.1'
+        ];
+
+        for (const modelName of githubModels) {
+            try {
+                const response = await fetch('https://models.github.ai/inference/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/vnd.github+json',
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${githubToken}`,
+                        'X-GitHub-Api-Version': '2022-11-28'
+                    },
+                    body: JSON.stringify({
+                        model: modelName,
+                        messages: [
+                            { role: 'system', content: 'তুমি একজন দক্ষ বাংলা সংবাদ সম্পাদক।' },
+                            { role: 'user', content: prompt }
+                        ],
+                        temperature: 0.3,
+                        max_tokens: 600
+                    }),
+                    signal: AbortSignal.timeout(25000)
+                });
+
+                const data = await response.json();
+                if (!response.ok || data.error) {
+                    const errMsg = data?.error?.message || data?.message || JSON.stringify(data);
+                    console.warn(`⚠️ [GitHub AI: ${modelName}] Error (${response.status}):`, errMsg);
+                    continue;
+                }
+
+                const aiSummary = data?.choices?.[0]?.message?.content?.trim();
+                if (aiSummary) {
+                    const cleanSummary = aiSummary.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+                    console.log(`✨ Summary generated using GitHub AI [${modelName}]!`);
+                    return `${cleanSummary}\n\n_🤖 Model: ${modelName}_`;
+                }
+            } catch (err) {
+                console.warn(`⚠️ [GitHub AI: ${modelName}] Request failed:`, err.message);
             }
-
-            const aiSummary = data?.choices?.[0]?.message?.content?.trim();
-            if (aiSummary) {
-                // Strip <think>...</think> tags just in case a reasoning model is ever used
-                const cleanSummary = aiSummary.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-                console.log(`✨ Summary generated using GitHub AI [${modelName}]!`);
-                return `${cleanSummary}\n\n_🤖 Model: ${modelName} (GitHub AI)_`;
-            }
-        } catch (err) {
-            console.warn(`⚠️ [GitHub AI: ${modelName}] Request failed:`, err.message);
         }
     }
 
-    console.log('❌ All GitHub AI models failed. Using fallback RSS text.');
+    // ---------------------------------------------------------
+    // 2. Automatic Backup: Google Gemini (if GEMINI_API_KEY is valid)
+    // ---------------------------------------------------------
+    if (geminiKey.startsWith('AIza')) {
+        const geminiModels = [
+            'gemini-3.8-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-flash-latest',
+            'gemini-2.5-flash'
+        ];
+
+        const safetySettings = [
+            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+        ];
+
+        for (const modelName of geminiModels) {
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`;
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        safetySettings: safetySettings,
+                        generationConfig: { temperature: 0.3 }
+                    }),
+                    signal: AbortSignal.timeout(25000)
+                });
+
+                const data = await response.json();
+                if (data.error) {
+                    console.warn(`⚠️ [Gemini: ${modelName}] API Error:`, data.error.message);
+                    continue;
+                }
+
+                const aiSummary = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                if (aiSummary) {
+                    console.log(`✨ Summary generated using Gemini [${modelName}]!`);
+                    return `${aiSummary}\n\n_🤖 Model: ${modelName}_`;
+                }
+            } catch (err) {
+                console.warn(`⚠️ [Gemini: ${modelName}] Request failed:`, err.message);
+            }
+        }
+    }
+
+    console.log('❌ All AI models failed. Using fallback RSS text.');
     const paras = fullText.split('\n\n');
     let result = '';
     for (const p of paras) {
@@ -104,8 +169,6 @@ ${fullText}`;
     const fallbackText = result || fullText.slice(0, 750);
     return `${fallbackText}\n\n_⚠️ Fallback: Raw RSS Text_`;
 }
-
-
 
 // Record sent articles into SENT_LOG.md
 function logSentArticle(headline) {
