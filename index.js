@@ -34,7 +34,7 @@ function extractRssText(item) {
         .trim() || item.title;
 }
 
-// Foolproof Multi-Engine AI Summarizer (Groq -> OpenRouter -> Gemini -> Keyless AI Backup)
+// Fast Summarizer using Your Exact Active Groq Models (3,000 free summaries/day)
 async function summarizeWithGemini(headline, fullText) {
     const systemPrompt = 'তুমি একজন পেশাদার বাংলা সংবাদ সম্পাদক। তোমার কাজ হলো সংবাদের মূল তথ্য বজায় রেখে প্রাঞ্জল বাংলায় সারাংশ লেখা।';
     const prompt = `নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
@@ -46,124 +46,65 @@ async function summarizeWithGemini(headline, fullText) {
 ${fullText}`;
 
     const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-    console.log(`🔑 Key check: prefix="${apiKey.slice(0, 4)}...", length=${apiKey.length}`);
 
-    // =========================================================================
-    // ENGINE 1: GROQ CLOUD (If you put a free gsk_... key in GEMINI_API_KEY)
-    // Zero news censorship, 2-second speed, 1,000+ req/day
-    // =========================================================================
-    if (apiKey.startsWith('gsk_')) {
-        const groqModels = [
-            'llama-3.3-70b-versatile',
-            'meta-llama/llama-4-scout-17b-16e-instruct',
-            'llama-3.1-8b-instant'
-        ];
+    // 1. Primary Engine: Your exact active Groq models
+    const groqModels = [
+        'openai/gpt-oss-120b',
+        'qwen/qwen3.6-27b',
+        'openai/gpt-oss-20b'
+    ];
 
-        for (const modelName of groqModels) {
-            try {
-                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: modelName,
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user', content: prompt }
-                        ],
-                        temperature: 0.3,
-                        max_tokens: 700
-                    }),
-                    signal: AbortSignal.timeout(25000)
-                });
+    for (const modelName of groqModels) {
+        try {
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: modelName,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: prompt }
+                    ],
+                    temperature: 0.3,
+                    max_tokens: 900
+                }),
+                signal: AbortSignal.timeout(25000)
+            });
 
-                const data = await response.json();
-                if (!response.ok || data.error) {
-                    console.warn(`⚠️ [Groq: ${modelName}] Error:`, data?.error?.message || response.status);
-                    continue;
-                }
-
-                const aiSummary = data?.choices?.[0]?.message?.content?.trim();
-                if (aiSummary) {
-                    const clean = aiSummary.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-                    console.log(`✨ Summary generated via Groq [${modelName}]!`);
-                    return `${clean}\n\n_🤖 Model: ${modelName} (Groq)_`;
-                }
-            } catch (err) {
-                console.warn(`⚠️ [Groq: ${modelName}] Request failed:`, err.message);
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                console.warn(`⚠️ [Groq: ${modelName}] Error:`, data?.error?.message || response.status);
+                continue;
             }
+
+            const rawContent = data?.choices?.[0]?.message?.content?.trim() || '';
+            // Remove internal <think>...</think> reasoning tags if present
+            const cleanSummary = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+            if (cleanSummary && cleanSummary.length > 40) {
+                console.log(`✨ Summary generated via Groq [${modelName}]!`);
+                return `${cleanSummary}\n\n_🤖 Model: ${modelName}_`;
+            } else {
+                console.warn(`⚠️ [Groq: ${modelName}] returned empty text.`);
+            }
+        } catch (err) {
+            console.warn(`⚠️ [Groq: ${modelName}] Request failed:`, err.message);
         }
     }
 
-    // =========================================================================
-    // ENGINE 2: GOOGLE GEMINI (If you put a valid AIzaSy... key in GEMINI_API_KEY)
-    // Uses ONLY real v1beta API model IDs
-    // =========================================================================
-    if (apiKey.startsWith('AIza')) {
-        const geminiModels = [
-            'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-            'gemini-2.0-flash',
-            'gemini-1.5-flash'
-        ];
-
-        const safetySettings = [
-            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
-        ];
-
-        for (const modelName of geminiModels) {
-            try {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: `${systemPrompt}\n\n${prompt}` }] }],
-                        safetySettings,
-                        generationConfig: { temperature: 0.3 }
-                    }),
-                    signal: AbortSignal.timeout(25000)
-                });
-
-                const data = await response.json();
-                if (data.error) {
-                    console.warn(`⚠️ [Gemini: ${modelName}] Error:`, data.error.message);
-                    continue;
-                }
-
-                const parts = data?.candidates?.[0]?.content?.parts || [];
-                const textPart = parts.find(p => p.text && !p.thought) || parts[0];
-                const aiSummary = textPart?.text?.trim();
-
-                if (aiSummary) {
-                    console.log(`✨ Summary generated via Gemini [${modelName}]!`);
-                    return `${aiSummary}\n\n_🤖 Model: ${modelName}_`;
-                } else {
-                    const reason = data?.candidates?.[0]?.finishReason || data?.promptFeedback?.blockReason || 'EMPTY';
-                    console.warn(`⚠️ [Gemini: ${modelName}] blocked or empty. Reason: ${reason}`);
-                }
-            } catch (err) {
-                console.warn(`⚠️ [Gemini: ${modelName}] Request failed:`, err.message);
-            }
-        }
-    }
-
-    // =========================================================================
-    // ENGINE 3: ZERO-KEY BACKUP (Pollinations OpenAI-Compatible Endpoint)
-    // Works with NO API KEY AT ALL if your key is missing, expired, or blocked!
-    // =========================================================================
+    // 2. Emergency Backup: Keyless AI (Only runs if all 3 Groq models fail)
     try {
-        console.log('🔄 Trying keyless AI backup (Pollinations OpenAI)...');
+        console.log('🔄 Trying keyless AI backup...');
+        await new Promise(r => setTimeout(r, 3000));
         const response = await fetch('https://text.pollinations.ai/openai', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: 'openai',
+                seed: Math.floor(Math.random() * 100000),
                 messages: [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt }
@@ -174,21 +115,26 @@ ${fullText}`;
         });
 
         if (response.ok) {
-            const data = await response.json();
-            const aiSummary = data?.choices?.[0]?.message?.content?.trim();
-            if (aiSummary && aiSummary.length > 50) {
+            const rawText = await response.text();
+            let aiSummary = '';
+            try {
+                const data = JSON.parse(rawText);
+                aiSummary = data?.choices?.[0]?.message?.content?.trim() || '';
+            } catch {
+                aiSummary = rawText.trim();
+            }
+            const clean = aiSummary.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+            if (clean && clean.length > 50 && !clean.startsWith('<!DOCTYPE')) {
                 console.log('✨ Summary generated via Keyless Backup AI!');
-                return `${aiSummary}\n\n_🤖 Model: GPT-4o-mini (Backup AI)_`;
+                return `${clean}\n\n_🤖 Model: Backup AI_`;
             }
         }
     } catch (err) {
-        console.warn('⚠️ [Keyless Backup AI] failed:', err.message);
+        console.warn('⚠️ [Keyless Backup] failed:', err.message);
     }
 
-    // =========================================================================
-    // FINAL FALLBACK: Raw RSS Text (Only if the entire internet is down)
-    // =========================================================================
-    console.log('❌ All AI engines failed. Using fallback RSS text.');
+    // 3. Final Fallback: Raw RSS Text
+    console.log('❌ All AI models failed. Using fallback RSS text.');
     const paras = fullText.split('\n\n');
     let result = '';
     for (const p of paras) {
@@ -199,6 +145,7 @@ ${fullText}`;
     const fallbackText = result || fullText.slice(0, 750);
     return `${fallbackText}\n\n_⚠️ Fallback: Raw RSS Text_`;
 }
+
 
 
 
