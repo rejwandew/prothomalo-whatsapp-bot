@@ -10,7 +10,7 @@ setTimeout(() => {
 }, 150000);
 
 const MY_PHONE_NUMBER = '8801839823498';
-const RECEIVER_NUMBER = '8801907323903';
+const RECEIVER_NUMBER = '8801725483586';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const FORCE_SEND_ONE_IF_NO_NEW = false;
 
