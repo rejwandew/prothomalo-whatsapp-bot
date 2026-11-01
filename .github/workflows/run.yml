@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: write          # Allows GitHub to save your encrypted session & news cache
+  models: read             # Allows built-in free access to GitHub AI Models!
 
 jobs:
   send-news:
@@ -37,6 +38,7 @@ jobs:
 
       - name: Run Bot
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node index.js
 
