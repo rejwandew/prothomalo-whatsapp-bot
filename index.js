@@ -34,9 +34,10 @@ function extractRssText(item) {
         .trim() || item.title;
 }
 
-// Universal Summarizer: Tries New GitHub AI Endpoint + Gemini (if AIzaSy key exists)
+// Foolproof Multi-Engine AI Summarizer (Groq -> OpenRouter -> Gemini -> Keyless AI Backup)
 async function summarizeWithGemini(headline, fullText) {
-    const prompt = `তুমি একজন পেশাদার সংবাদ সম্পাদক। নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
+    const systemPrompt = 'তুমি একজন পেশাদার বাংলা সংবাদ সম্পাদক। তোমার কাজ হলো সংবাদের মূল তথ্য বজায় রেখে প্রাঞ্জল বাংলায় সারাংশ লেখা।';
+    const prompt = `নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
 এই প্রতিবেদনটি পড়ে এর সবগুলো গুরুত্বপূর্ণ তথ্য, প্রেক্ষাপট ও মূল বক্তব্য বজায় রেখে একটি সুন্দর, প্রাঞ্জল ও মাঝারি আকারের সারাংশ (প্রায় ১২০ থেকে ১৬০ শব্দের মধ্যে, ২টি অনুচ্ছেদে) বাংলায় লিখে দাও। 
 সারাংশের ভেতর নতুন করে শিরোনাম, কোনো লিংক বা অতিরিক্ত ভূমিকা লিখবে না—শুধুমাত্র মূল সারাংশটুকু লিখবে।
 
@@ -44,70 +45,68 @@ async function summarizeWithGemini(headline, fullText) {
 বিস্তারিত সংবাদ:
 ${fullText}`;
 
-    const githubToken = (process.env.GITHUB_TOKEN || '').trim();
-    const geminiKey = (process.env.GEMINI_API_KEY || '').trim();
+    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    console.log(`🔑 Key check: prefix="${apiKey.slice(0, 4)}...", length=${apiKey.length}`);
 
-    // ---------------------------------------------------------
-    // 1. Try New GitHub Models Endpoint (models.github.ai)
-    // ---------------------------------------------------------
-    if (githubToken) {
-        const githubModels = [
-            'openai/gpt-4o-mini',
-            'deepseek/DeepSeek-V3-0324',
-            'meta/Llama-3.3-70B-Instruct',
-            'openai/gpt-4.1'
+    // =========================================================================
+    // ENGINE 1: GROQ CLOUD (If you put a free gsk_... key in GEMINI_API_KEY)
+    // Zero news censorship, 2-second speed, 1,000+ req/day
+    // =========================================================================
+    if (apiKey.startsWith('gsk_')) {
+        const groqModels = [
+            'llama-3.3-70b-versatile',
+            'meta-llama/llama-4-scout-17b-16e-instruct',
+            'llama-3.1-8b-instant'
         ];
 
-        for (const modelName of githubModels) {
+        for (const modelName of groqModels) {
             try {
-                const response = await fetch('https://models.github.ai/inference/chat/completions', {
+                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                     method: 'POST',
                     headers: {
-                        'Accept': 'application/vnd.github+json',
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${githubToken}`,
-                        'X-GitHub-Api-Version': '2022-11-28'
+                        'Authorization': `Bearer ${apiKey}`
                     },
                     body: JSON.stringify({
                         model: modelName,
                         messages: [
-                            { role: 'system', content: 'তুমি একজন দক্ষ বাংলা সংবাদ সম্পাদক।' },
+                            { role: 'system', content: systemPrompt },
                             { role: 'user', content: prompt }
                         ],
                         temperature: 0.3,
-                        max_tokens: 600
+                        max_tokens: 700
                     }),
                     signal: AbortSignal.timeout(25000)
                 });
 
                 const data = await response.json();
                 if (!response.ok || data.error) {
-                    const errMsg = data?.error?.message || data?.message || JSON.stringify(data);
-                    console.warn(`⚠️ [GitHub AI: ${modelName}] Error (${response.status}):`, errMsg);
+                    console.warn(`⚠️ [Groq: ${modelName}] Error:`, data?.error?.message || response.status);
                     continue;
                 }
 
                 const aiSummary = data?.choices?.[0]?.message?.content?.trim();
                 if (aiSummary) {
-                    const cleanSummary = aiSummary.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-                    console.log(`✨ Summary generated using GitHub AI [${modelName}]!`);
-                    return `${cleanSummary}\n\n_🤖 Model: ${modelName}_`;
+                    const clean = aiSummary.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+                    console.log(`✨ Summary generated via Groq [${modelName}]!`);
+                    return `${clean}\n\n_🤖 Model: ${modelName} (Groq)_`;
                 }
             } catch (err) {
-                console.warn(`⚠️ [GitHub AI: ${modelName}] Request failed:`, err.message);
+                console.warn(`⚠️ [Groq: ${modelName}] Request failed:`, err.message);
             }
         }
     }
 
-    // ---------------------------------------------------------
-    // 2. Automatic Backup: Google Gemini (if GEMINI_API_KEY is valid)
-    // ---------------------------------------------------------
-    if (geminiKey.startsWith('AIza')) {
+    // =========================================================================
+    // ENGINE 2: GOOGLE GEMINI (If you put a valid AIzaSy... key in GEMINI_API_KEY)
+    // Uses ONLY real v1beta API model IDs
+    // =========================================================================
+    if (apiKey.startsWith('AIza')) {
         const geminiModels = [
-            'gemini-3.8-flash',
-            'gemini-3.5-flash-lite',
-            'gemini-flash-latest',
-            'gemini-2.5-flash'
+            'gemini-2.5-flash',
+            'gemini-2.5-flash-lite',
+            'gemini-2.0-flash',
+            'gemini-1.5-flash'
         ];
 
         const safetySettings = [
@@ -119,13 +118,13 @@ ${fullText}`;
 
         for (const modelName of geminiModels) {
             try {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`;
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        safetySettings: safetySettings,
+                        contents: [{ parts: [{ text: `${systemPrompt}\n\n${prompt}` }] }],
+                        safetySettings,
                         generationConfig: { temperature: 0.3 }
                     }),
                     signal: AbortSignal.timeout(25000)
@@ -133,14 +132,20 @@ ${fullText}`;
 
                 const data = await response.json();
                 if (data.error) {
-                    console.warn(`⚠️ [Gemini: ${modelName}] API Error:`, data.error.message);
+                    console.warn(`⚠️ [Gemini: ${modelName}] Error:`, data.error.message);
                     continue;
                 }
 
-                const aiSummary = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                const parts = data?.candidates?.[0]?.content?.parts || [];
+                const textPart = parts.find(p => p.text && !p.thought) || parts[0];
+                const aiSummary = textPart?.text?.trim();
+
                 if (aiSummary) {
-                    console.log(`✨ Summary generated using Gemini [${modelName}]!`);
+                    console.log(`✨ Summary generated via Gemini [${modelName}]!`);
                     return `${aiSummary}\n\n_🤖 Model: ${modelName}_`;
+                } else {
+                    const reason = data?.candidates?.[0]?.finishReason || data?.promptFeedback?.blockReason || 'EMPTY';
+                    console.warn(`⚠️ [Gemini: ${modelName}] blocked or empty. Reason: ${reason}`);
                 }
             } catch (err) {
                 console.warn(`⚠️ [Gemini: ${modelName}] Request failed:`, err.message);
@@ -148,7 +153,42 @@ ${fullText}`;
         }
     }
 
-    console.log('❌ All AI models failed. Using fallback RSS text.');
+    // =========================================================================
+    // ENGINE 3: ZERO-KEY BACKUP (Pollinations OpenAI-Compatible Endpoint)
+    // Works with NO API KEY AT ALL if your key is missing, expired, or blocked!
+    // =========================================================================
+    try {
+        console.log('🔄 Trying keyless AI backup (Pollinations OpenAI)...');
+        const response = await fetch('https://text.pollinations.ai/openai', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: 'openai',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: prompt }
+                ],
+                temperature: 0.3
+            }),
+            signal: AbortSignal.timeout(30000)
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const aiSummary = data?.choices?.[0]?.message?.content?.trim();
+            if (aiSummary && aiSummary.length > 50) {
+                console.log('✨ Summary generated via Keyless Backup AI!');
+                return `${aiSummary}\n\n_🤖 Model: GPT-4o-mini (Backup AI)_`;
+            }
+        }
+    } catch (err) {
+        console.warn('⚠️ [Keyless Backup AI] failed:', err.message);
+    }
+
+    // =========================================================================
+    // FINAL FALLBACK: Raw RSS Text (Only if the entire internet is down)
+    // =========================================================================
+    console.log('❌ All AI engines failed. Using fallback RSS text.');
     const paras = fullText.split('\n\n');
     let result = '';
     for (const p of paras) {
@@ -159,6 +199,7 @@ ${fullText}`;
     const fallbackText = result || fullText.slice(0, 750);
     return `${fallbackText}\n\n_⚠️ Fallback: Raw RSS Text_`;
 }
+
 
 
 // Record sent articles into SENT_LOG.md
