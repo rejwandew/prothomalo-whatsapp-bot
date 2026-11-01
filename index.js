@@ -34,10 +34,10 @@ function extractRssText(item) {
         .trim() || item.title;
 }
 
-// Fast Gemini Summarizer with 12s timeout per model
+// Fast Gemini Summarizer with Safety Filters Disabled for News & Model Tag
 async function summarizeWithGemini(headline, fullText) {
     const prompt = `তুমি একজন পেশাদার সংবাদ সম্পাদক। নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
-এই প্রতিবেদনটি পড়ে এর সবগুলো গুরুত্বপূর্ণ তথ্য, প্রেক্ষাপট ও মূল বক্তব্য বজায় রেখে একটি সুন্দর, প্রাঞ্জল ও মাঝারি আকারের সারাংশ (প্রায় ৮০ থেকে ৯০ শব্দের মধ্যে, ২টি অনুচ্ছেদে) বাংলায় লিখে দাও। 
+এই প্রতিবেদনটি পড়ে এর সবগুলো গুরুত্বপূর্ণ তথ্য, প্রেক্ষাপট ও মূল বক্তব্য বজায় রেখে একটি সুন্দর, প্রাঞ্জল ও মাঝারি আকারের সারাংশ (প্রায় ১২০ থেকে ১৬০ শব্দের মধ্যে, ২টি অনুচ্ছেদে) বাংলায় লিখে দাও। 
 সারাংশের ভেতর নতুন করে শিরোনাম, কোনো লিংক বা অতিরিক্ত ভূমিকা লিখবে না—শুধুমাত্র মূল সারাংশটুকু লিখবে।
 
 শিরোনাম: ${headline}
@@ -46,9 +46,16 @@ ${fullText}`;
 
     const candidateModels = [
         'gemini-3.8-flash',
-        'gemini-3.6-flash',
+        'gemini-3.5-flash-lite',
         'gemini-flash-latest',
         'gemini-2.5-flash'
+    ];
+
+    const safetySettings = [
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
     ];
 
     for (const modelName of candidateModels) {
@@ -59,24 +66,32 @@ ${fullText}`;
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     contents: [{ parts: [{ text: prompt }] }],
+                    safetySettings: safetySettings,
                     generationConfig: { temperature: 0.3 }
                 }),
-                signal: AbortSignal.timeout(12000)
+                signal: AbortSignal.timeout(25000)
             });
 
             const data = await response.json();
-            if (data.error) continue;
+            if (data.error) {
+                console.warn(`⚠️ [${modelName}] API Error:`, data.error.message);
+                continue;
+            }
 
             const aiSummary = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
             if (aiSummary) {
                 console.log(`✨ Gemini summary generated using [${modelName}]!`);
-                return aiSummary;
+                return `${aiSummary}\n\n_🤖 Model: ${modelName}_`;
+            } else {
+                const reason = data?.candidates?.[0]?.finishReason || 'UNKNOWN';
+                console.warn(`⚠️ [${modelName}] returned empty text. Finish reason: ${reason}`);
             }
         } catch (err) {
-            // Try next model
+            console.warn(`⚠️ [${modelName}] Request failed:`, err.message);
         }
     }
 
+    console.log('❌ All Gemini models failed. Using fallback RSS text.');
     // Fallback if Gemini fails
     const paras = fullText.split('\n\n');
     let result = '';
@@ -85,8 +100,10 @@ ${fullText}`;
         else if (result.length + p.length < 850) result += '\n\n' + p;
         else break;
     }
-    return result || fullText.slice(0, 750);
+    const fallbackText = result || fullText.slice(0, 750);
+    return `${fallbackText}\n\n_⚠️ Fallback: Raw RSS Text_`;
 }
+
 
 // Record sent articles into SENT_LOG.md
 function logSentArticle(headline) {
