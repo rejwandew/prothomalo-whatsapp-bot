@@ -34,17 +34,7 @@ function extractRssText(item) {
         .trim() || item.title;
 }
 
-// Fast Summarizer using GitHub Models (GPT-4o-mini, DeepSeek-V3, Llama-3.3)
-async function summarizeWithGemini(headline, fullText) {
-    const prompt = `তুমি একজন পেশাদার সংবাদ সম্পাদক। নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
-এই প্রতিবেদনটি পড়ে এর সবগুলো গুরুত্বপূর্ণ তথ্য, প্রেক্ষাপট ও মূল বক্তব্য বজায় রেখে একটি সুন্দর, প্রাঞ্জল ও মাঝারি আকারের সারাংশ (প্রায় ১২০ থেকে ১৬০ শব্দের মধ্যে, ২টি অনুচ্ছেদে) বাংলায় লিখে দাও। 
-সারাংশের ভেতর নতুন করে শিরোনাম, কোনো লিংক বা অতিরিক্ত ভূমিকা লিখবে না—শুধুমাত্র মূল সারাংশটুকু লিখবে।
-
-শিরোনাম: ${headline}
-বিস্তারিত সংবাদ:
-${fullText}`;
-
-    // Universal Summarizer: Tries New GitHub AI Endpoint + Gemini (if AIzaSy key exists)
+// Universal Summarizer: Tries New GitHub AI Endpoint + Gemini (if AIzaSy key exists)
 async function summarizeWithGemini(headline, fullText) {
     const prompt = `তুমি একজন পেশাদার সংবাদ সম্পাদক। নিচের প্রথম আলো সংবাদের মূল শিরোনাম এবং বিস্তারিত প্রতিবেদন দেওয়া হলো। 
 এই প্রতিবেদনটি পড়ে এর সবগুলো গুরুত্বপূর্ণ তথ্য, প্রেক্ষাপট ও মূল বক্তব্য বজায় রেখে একটি সুন্দর, প্রাঞ্জল ও মাঝারি আকারের সারাংশ (প্রায় ১২০ থেকে ১৬০ শব্দের মধ্যে, ২টি অনুচ্ছেদে) বাংলায় লিখে দাও। 
@@ -169,6 +159,7 @@ ${fullText}`;
     const fallbackText = result || fullText.slice(0, 750);
     return `${fallbackText}\n\n_⚠️ Fallback: Raw RSS Text_`;
 }
+
 
 // Record sent articles into SENT_LOG.md
 function logSentArticle(headline) {
